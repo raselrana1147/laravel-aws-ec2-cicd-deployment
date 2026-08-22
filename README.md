@@ -80,42 +80,132 @@ ssh -i your-key.pem ubuntu@<EC2_PUBLIC_IP>
 
 ## Part 2 — Install Required Packages
 
+> **⚠️ Important — read this before running anything.** The exact package names below depend on which PHP version your Ubuntu release can actually provide. Newer Ubuntu releases (e.g. "resolute" / 26.04) ship a very new PHP version by default, and third-party PPAs like `ondrej/php` often haven't published builds for the newest Ubuntu codename yet — trying to add that PPA on a brand-new Ubuntu release can fail with a `404 Not Found` error. Follow the check in **Step 2.1** first to find out which situation you're in, then use the matching install path.
+
+### Step 2.0 — Update the System
+
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
 **What this does:** `apt` is Ubuntu's package manager — the tool used to install/update software. `apt update` refreshes the list of available software versions (it doesn't install anything yet, just checks what's new). `apt upgrade -y` then actually installs the latest versions of already-installed software. `sudo` means "run this as an administrator" — required because system-level changes need elevated permission. `-y` auto-answers "yes" to any confirmation prompts, so the command doesn't pause waiting for input.
+
+### Step 2.1 — Check Which PHP Version Your System Already Offers
+
+Before deciding whether you need the `ondrej/php` PPA at all, check what's available by default:
+
+```bash
+apt-cache policy php
+```
+
+Look at the `Candidate:` line in the output. This tells you which PHP version Ubuntu's own repositories can already install, with no extra setup.
+
+- **If it shows a reasonably recent version (8.1 or newer)** → skip the PPA entirely and go to **Path A** below.
+- **If it shows nothing, or an old version (below 8.1)** → you need the PPA — go to **Path B** below.
+
+> **Why this step matters:** On a very new Ubuntu release, `apt-cache policy php` may already show something like `8.5`, meaning your distro already ships a modern PHP — adding the `ondrej/php` PPA on top is unnecessary, and may even fail with a `404` error because the PPA hasn't caught up to that new Ubuntu release yet.
+
+---
+
+### Path A — Ubuntu Already Provides a Modern PHP Version (No PPA Needed)
+
+Install packages **one at a time**, using unversioned names (`php`, `php-fpm`, etc.) — this is correct here specifically because your distro's default repo is already the authoritative source for a known, modern version, so there's no ambiguity about what "default" means.
+
+```bash
+sudo apt install -y php
+php -v
+```
+**What this does:** Installs the core PHP engine. `php -v` immediately after confirms the installed version — check it matches what `apt-cache policy php` showed as the candidate.
+
+```bash
+sudo apt install -y php-fpm
+```
+**What this does:** Short for "FastCGI Process Manager." PHP by itself can't talk to Nginx directly — FPM runs PHP in the background as a service that Nginx can send requests to. This is the engine that actually executes your Laravel code when someone visits your site. Confirm it's running with `sudo systemctl status php*-fpm` (the exact service name includes the version number, e.g. `php8.5-fpm` — check with `systemctl list-units --type=service | grep php`).
+
+```bash
+sudo apt install -y php-mysql
+```
+**What this does:** Lets PHP talk to MySQL databases. Without this, Laravel literally cannot connect to your database — you'd get a "driver not found" error.
+
+```bash
+sudo apt install -y php-mbstring
+```
+**What this does:** Handles text properly, especially non-English characters (accents, Bangla script, emojis, etc.). Laravel actually refuses to install via Composer without this extension present.
+
+```bash
+sudo apt install -y php-xml
+```
+**What this does:** Lets PHP read/write XML files. Composer and testing tools like PHPUnit rely on this internally, even if your app never directly touches XML.
+
+```bash
+sudo apt install -y php-bcmath
+```
+**What this does:** Enables precise math with very large or very precise decimal numbers (useful for money calculations). Some Laravel features and packages require it even if you don't use money math yourself.
+
+```bash
+sudo apt install -y php-curl
+```
+**What this does:** Lets your PHP code make outgoing web requests (e.g., calling another API). Laravel's built-in `Http::` helper depends on this.
+
+```bash
+sudo apt install -y php-zip
+```
+**What this does:** Lets PHP work with `.zip` files. Composer uses this to quickly unpack downloaded packages.
+
+```bash
+sudo apt install -y php-gd
+```
+**What this does:** Adds image-processing capability (resizing, cropping, thumbnails) — needed if your app handles image uploads.
+
+```bash
+sudo apt install -y unzip git curl nginx
+```
+**What this does:** `unzip` is a general system tool (not PHP-specific) that Composer sometimes calls directly to extract files. `git` lets the server download code from GitHub repositories (`git clone`, `git pull`) — needed both for initial setup and for CI/CD. `curl` (the command-line tool, separate from the `php-curl` extension) is useful for testing (e.g., checking if your site responds) and is used internally by the Composer installer. `nginx` is the actual web server software.
+
+> **⚠️ Compatibility warning:** If your system offers a very new PHP version (8.4+), it may be newer than what your specific Laravel version has been tested against. After cloning your project (Part 4), run `composer check-platform-reqs` to check for mismatches. If Composer install fails due to a PHP version constraint, the safer long-term fix is provisioning EC2 with a well-supported Ubuntu LTS (22.04 or 24.04) rather than fighting version mismatches on a bleeding-edge release.
+
+---
+
+### Path B — Your System Needs the PPA (Older Ubuntu / Older Default PHP)
 
 ```bash
 sudo apt install -y software-properties-common
 sudo add-apt-repository ppa:ondrej/php -y
 sudo apt update
 ```
-**What this does:** By default, Ubuntu's built-in software sources may only offer one specific PHP version, which might be older than what Laravel needs. `ppa:ondrej/php` is a trusted, widely-used third-party source ("PPA" = Personal Package Archive) that offers multiple PHP versions, including the newest ones. `software-properties-common` is a helper tool needed to add PPAs in the first place. After adding a new source, `apt update` refreshes the list again so it now includes packages from this new PPA too.
+**What this does:** By default, Ubuntu's built-in software sources may only offer one specific PHP version, which might be older than what Laravel needs. `ppa:ondrej/php` is a trusted, widely-used third-party source ("PPA" = Personal Package Archive) that offers multiple PHP versions, including newer ones. `software-properties-common` is a helper tool needed to add PPAs in the first place. After adding a new source, `apt update` refreshes the list again so it now includes packages from this new PPA too.
+
+If this step fails with something like:
+```
+Err:6 https://ppa.launchpadcontent.net/ondrej/php/ubuntu <codename> Release
+  404  Not Found
+```
+this means the PPA doesn't yet have builds for your specific Ubuntu codename (common right after a new Ubuntu release). Remove the broken source and go back to **Path A** instead:
+```bash
+sudo add-apt-repository --remove ppa:ondrej/php -y
+sudo rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list
+sudo apt update
+```
+
+Once the PPA is added successfully, install specific, version-pinned packages one at a time:
 
 ```bash
-sudo apt install -y php8.2 php8.2-fpm php8.2-mysql php8.2-mbstring \
-php8.2-xml php8.2-bcmath php8.2-curl php8.2-zip php8.2-gd \
-unzip git curl nginx
+sudo apt install -y php8.2
+sudo apt install -y php8.2-fpm
+sudo apt install -y php8.2-mysql
+sudo apt install -y php8.2-mbstring
+sudo apt install -y php8.2-xml
+sudo apt install -y php8.2-bcmath
+sudo apt install -y php8.2-curl
+sudo apt install -y php8.2-zip
+sudo apt install -y php8.2-gd
+sudo apt install -y unzip git curl nginx
 ```
-**What this does:** Installs PHP version 8.2 specifically (not just "whatever PHP is default"), along with a set of add-on modules ("extensions") that Laravel needs, plus a few general tools. Here's what each one is actually for:
 
-| Package | Plain-English Explanation |
-|---|---|
-| `php8.2` | The core PHP program itself — without this, nothing PHP-related works at all |
-| `php8.2-fpm` | Short for "FastCGI Process Manager." PHP by itself can't talk to Nginx directly — FPM runs PHP in the background as a service that Nginx can send requests to. Think of it as the engine that actually executes your Laravel code when someone visits your site |
-| `php8.2-mysql` | Lets PHP talk to MySQL databases. Without this, Laravel literally cannot connect to your database — you'd get a "driver not found" error |
-| `php8.2-mbstring` | Handles text properly, especially non-English characters (accents, Bangla script, emojis, etc.). Laravel actually refuses to install via Composer without this extension present |
-| `php8.2-xml` | Lets PHP read/write XML files. Composer and testing tools like PHPUnit rely on this internally, even if your app never directly touches XML |
-| `php8.2-bcmath` | Enables precise math with very large or very precise decimal numbers (useful for money calculations). Some Laravel features and packages require it even if you don't use money math yourself |
-| `php8.2-curl` | Lets your PHP code make outgoing web requests (e.g., calling another API). Laravel's built-in `Http::` helper depends on this |
-| `php8.2-zip` | Lets PHP work with `.zip` files. Composer uses this to quickly unpack downloaded packages |
-| `php8.2-gd` | Adds image-processing capability (resizing, cropping, thumbnails) — needed if your app handles image uploads |
-| `unzip` | A general system tool (not PHP-specific) that Composer sometimes calls directly to extract files |
-| `git` | Lets the server download code from GitHub repositories (`git clone`, `git pull`). Needed both for your initial setup and for CI/CD, which regularly pulls new code |
-| `curl` | A command-line tool for making web requests, useful for testing (e.g., checking if your site responds) and used internally by the Composer installer |
-| `nginx` | The actual web server software — the program that listens for visitor requests on the internet and decides how to respond (serve a file directly, or hand it off to PHP-FPM) |
+> **Why version-pinned (`php8.2-fpm`) instead of unversioned (`php-fpm`) in this path?** With a PPA offering multiple PHP versions side by side, an unversioned name is ambiguous — being explicit means you always know exactly which PHP version is running, which matters because Laravel has minimum version requirements.
 
-> **Why version-pinned (`php8.2-fpm`) instead of unversioned (`php-fpm`)?** Without a version number, Ubuntu installs whatever the "default" PHP happens to be in its repositories — which can silently change between Ubuntu releases or PPA updates. Being explicit means you always know exactly which PHP version is running, which matters because Laravel has minimum version requirements.
+---
+
+### Install Composer (Same for Both Paths)
 
 ```bash
 curl -sS https://getcomposer.org/installer | php
@@ -517,6 +607,7 @@ APP_URL=https://yourdomain.com
 |---|---|---|
 | `Database file at path [...] does not exist. Connection: sqlite` | Missing `DB_CONNECTION=mysql` in `.env` — Laravel silently defaulted to SQLite | Add `DB_CONNECTION=mysql` explicitly, then run `php artisan config:clear` |
 | `SQLSTATE[HY000] [1049] Unknown database` | The database name in `.env` was never actually created inside MySQL/RDS | Connect via `mysql -h <host> -u <user> -p` and run `CREATE DATABASE your_db;` |
+| `Unable to locate package php8.2` / `Couldn't find any package by glob 'php8.2'` | The `ondrej/php` PPA either wasn't added, or `apt update` wasn't run after adding it — sometimes the PPA doesn't yet support a brand-new Ubuntu codename and fails with a `404 Not Found` | Run `apt-cache policy php` to see what version your distro already provides. If it's 8.1+, skip the PPA entirely and install unversioned packages (`php`, `php-fpm`, etc.) — see Part 2, Path A |
 | `ERROR 2003: Can't connect to MySQL server` | Security group is blocking traffic between EC2 and RDS | Add an inbound rule on RDS's security group allowing port 3306 from EC2's security group specifically |
 | 502 Bad Gateway | PHP-FPM isn't running, or Nginx is pointing at the wrong socket path | Run `sudo systemctl status php8.2-fpm` to check it's active; confirm the socket path in your Nginx config matches the actual PHP-FPM version installed |
 | Blank white page with no error shown | `APP_DEBUG=false` is correctly hiding a real underlying error from visitors | Check `storage/logs/laravel.log` on the server for the actual error details |
