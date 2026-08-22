@@ -292,6 +292,8 @@ EXIT;
 
 ## Part 4 — Clone and Configure the Laravel Project
 
+> **If your repo is private**, plain `https://` cloning will prompt for a username/password — but GitHub no longer accepts real passwords for git operations (see Troubleshooting table). Set up SSH access on the server once (`ssh-keygen`, add the public key to GitHub, then clone using the `git@github.com:...` URL) — the same key can be reused for the GitHub Actions deploy key discussed in Part 6.
+
 ```bash
 cd /var/www
 sudo git clone https://github.com/<your-username>/<your-repo>.git my-laravel-app
@@ -613,6 +615,12 @@ APP_URL=https://yourdomain.com
 | Blank white page with no error shown | `APP_DEBUG=false` is correctly hiding a real underlying error from visitors | Check `storage/logs/laravel.log` on the server for the actual error details |
 | Permission denied writing to storage/logs | `storage`/`bootstrap/cache` aren't owned by the `www-data` user | Re-run the `chown`/`chmod` commands from Part 4 |
 | GitHub Actions workflow hangs indefinitely | A `sudo` command in the SSH script is waiting for a password that will never come | Set up scoped passwordless sudo for that exact command (Part 6.4) — never rely on interactive `sudo` inside CI/CD |
+| `fatal: could not create work tree dir '...': Permission denied` on `git clone` | You're inside a folder (e.g. `/var/www`) owned by `root`, and ran `git clone` without `sudo` | Either run `sudo git clone ...` then `sudo chown -R ubuntu:www-data <folder>`, or `sudo chown -R ubuntu:www-data /var/www` first, then clone normally without `sudo` |
+| `remote: Invalid username or token. Password authentication is not supported for Git operations.` | GitHub removed password auth for git in 2021 — a real account password no longer works, even if prompted for one | Use a Personal Access Token as the password instead, or better: generate an SSH key on the server, add the public half to GitHub, then clone via the `git@github.com:...` SSH URL |
+| `git@github.com: Permission denied (publickey).` even after adding an SSH key | Ran `git clone` with `sudo` — `sudo` runs as `root`, which has its own separate home directory and doesn't have the SSH key you generated as `ubuntu` | Fix folder ownership first (`sudo chown -R ubuntu:www-data <folder>`), then run `git clone` **without** `sudo` so it uses the `ubuntu` user's key. Test with `ssh -T git@github.com` to confirm the key is recognized |
+| `composer install` fails with `requires php ~8.2.0 \|\| ~8.3.0 \|\| ~8.4.0 -> your php version (8.x) does not satisfy that requirement` | A **dev-only** dependency (e.g. `pest`/`paratest`) doesn't yet support a very new PHP version installed on the server | Use `composer install --no-dev --ignore-platform-reqs`. Long-term fix: regenerate `composer.lock` on a machine running a supported PHP version, or provision EC2 with a mainstream LTS Ubuntu release instead of the newest one |
+| `The zip extension and unzip/7z commands are both missing, skipping` during `composer install` | Neither the PHP `zip` extension nor a system `unzip`/`7z` command is installed | Run `sudo apt install -y php-zip unzip`, then restart PHP-FPM (`sudo systemctl restart php<version>-fpm`) so the new extension is loaded, then retry `composer install` |
+| Nginx shows `active (running)`, `curl http://localhost` works on the server, but the site is unreachable from a browser (`ERR_CONNECTION_REFUSED`) | Almost always an AWS network-layer block, not a server problem — check in this order | **1)** Confirm you're browsing the exact **Public IPv4 address** shown on the instance's own summary panel in the AWS Console (not a value from an external tool like `ifconfig.me`, which can return a non-routable/NAT address in some environments). **2)** Confirm the Security Group *actually attached to the running instance* (check the instance's own Security tab) has an inbound rule for port 80 with Source `0.0.0.0/0`, and that any edits were actually saved. **3)** Check the subnet's Network ACL (VPC → Network ACLs) has an inbound ALLOW rule for the relevant traffic — a custom NACL can silently override a correct security group. **4)** Rule out the OS's own firewall with `sudo ufw status` |
 
 ---
 
